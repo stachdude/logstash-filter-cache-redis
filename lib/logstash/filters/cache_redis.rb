@@ -63,6 +63,8 @@ class LogStash::Filters::CacheRedis < LogStash::Filters::Base
 
     config :set, :validate => :string
 
+    config :expire, :validate => :number
+
     config :exists, :validate => :string
 
     config :del, :validate => :string
@@ -108,6 +110,12 @@ class LogStash::Filters::CacheRedis < LogStash::Filters::Base
     # config :get, :validate => :boolean, :default => false
     # O(N)
     config :lget, :validate => :string
+ 
+    # If set to true, data will be decoded after GET and result will be save as nested fields
+    config :json_decode, :validate => :boolean, :default => false
+
+    # If set to true, data will be encoded before SET
+    config :json_encode, :validate => :boolean, :default => false 
 
 
     public
@@ -133,11 +141,32 @@ class LogStash::Filters::CacheRedis < LogStash::Filters::Base
             @redis ||= connect
 
             if @get
-                event.set(@target, @redis.get(event.get(@get)))
+                if @json_decode
+                  value = @redis.get(event.get(@get))
+                  if value
+                    begin
+                      parsed = LogStash::Json.load(value)
+                    rescue => e
+                        @logger.warn("Error parsing json", :source => value, :exception => e)
+                      return
+                    end
+                    event.set(@target, parsed)
+                  end
+                else
+                    event.set(@target, @redis.get(event.get(@get)))
+                end
             end
 
             if @set
-                @redis.set(event.get(@set), event.get(@source))
+                if @json_encode
+                   data = LogStash::Json.dump(event.get(@source))
+                else
+                   data = event.get(@source)
+                end
+                @redis.set(event.get(@set), data)
+                if @expire
+                    @redis.expire(event.get(@set), @expire)
+                end
             end
 
             if @exists
